@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: herbal-clinic-backend
+    runtime: python
+    pythonVersion: 3.11
+    startCommand: gunicorn backend.wsgi:application
+    envVars:
+      - key: SECRET_KEY
+        prompt: true
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        prompt: true
+      - key: CORS_ALLOWED_ORIGINS
+        prompt: true
+    databases:
+      - name: herbal-clinic-db
+        engine: postgresql
+        version: "15"
+        plan: free
+
+databases:
+  - name: herbal-clinic-db
+    engine: postgresql
+    version: "15"
+    plan: free
