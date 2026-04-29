@@ -41,7 +41,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise for static file serving
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -78,7 +78,6 @@ TEMPLATES = [
 # ============================================================================
 # DATABASE
 # ============================================================================
-# Use DATABASE_URL from environment (Render provides this), fallback to SQLite
 if os.getenv('DATABASE_URL'):
     DATABASES = {
         'default': dj_database_url.config(
@@ -118,11 +117,8 @@ USE_TZ = True
 # ============================================================================
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
-
-# WhiteNoise configuration for static file compression
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # ============================================================================
@@ -132,13 +128,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'accounts.User'
 
 # ============================================================================
-# CORS CONFIGURATION
+# CORS CONFIGURATION – HARDCODED FOR PRODUCTION
 # ============================================================================
-# Allow specific origins from environment, fallback to allow all (development)
-CORS_ALLOWED_ORIGINS = os.getenv(
-    'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://localhost:8000'
-).split(',')
+CORS_ALLOWED_ORIGINS = [
+    "https://herbmedi-realy-back-qbad.vercel.app",   # your live frontend
+    "http://localhost:3000",                         # local development
+]
 CORS_ALLOW_CREDENTIALS = True
 
 # ============================================================================
@@ -170,19 +165,11 @@ SIMPLE_JWT = {
 # SECURITY SETTINGS (Production)
 # ============================================================================
 if not DEBUG:
-    # HTTPS & Security
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    
-    # HSTS
-    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    
-    # Additional security headers
     SECURE_BROWSER_XSS_FILTER = True
     X_FRAME_OPTIONS = 'DENY'
-    SECURE_CONTENT_SECURITY_POLICY = {
-        'default-src': ("'self'",),
-    }
