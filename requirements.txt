@@ -7,3 +7,4 @@ psycopg[binary]>=3.1.10   # ✅ replaces psycopg2-binary
 gunicorn==21.2.0
 whitenoise==6.6.0
 dj-database-url==2.1.0
+python-dotenv==1.0.1
