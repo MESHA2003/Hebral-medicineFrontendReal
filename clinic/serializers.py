@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Patient, Visit, Medicine, Prescription
+from .models import Patient, Visit, Medicine, Prescription, Receipt, ReceiptItem
 
 class DateOnlyField(serializers.DateField):
     def to_internal_value(self, value):
@@ -52,4 +52,16 @@ class PrescriptionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Prescription
+        fields = '__all__'
+
+class ReceiptItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReceiptItem
+        fields = '__all__'
+
+class ReceiptSerializer(serializers.ModelSerializer):
+    items = ReceiptItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Receipt
         fields = '__all__'

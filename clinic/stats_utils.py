@@ -1,11 +1,9 @@
-from django.db.models import Sum, Count, F, Q
+from django.db.models import Sum, Count, F
 from datetime import timedelta
 from django.utils import timezone
 
-from accounts import models
-from .models import Visit, Prescription, Medicine
-
 def get_reception_stats():
+    from .models import Visit
     cutoff = timezone.now().date() - timedelta(days=30)
     visits = Visit.objects.filter(created_at__date__gte=cutoff)
     return {
@@ -19,6 +17,7 @@ def get_reception_stats():
     }
 
 def get_doctor_stats():
+    from .models import Visit
     today = timezone.now().date()
     all_today = Visit.objects.filter(created_at__date=today)
     queue = Visit.objects.filter(status__in=['waiting', 'in_progress'])
@@ -31,39 +30,43 @@ def get_doctor_stats():
     }
 
 def get_pharmacy_stats():
-    # Include both 'completed' (sent to pharmacy) and 'dispensed' (fully verified) visits
+    from .models import Visit, Prescription
     completed_visits = Visit.objects.filter(status__in=['completed', 'dispensed'])
-    prescriptions = Prescription.objects.filter(visit__in=completed_visits).select_related('medicine', 'visit__patient')
-    pending = []
-    fully = []
+    
+    # Separate into pending (still has undispensed items) and fully dispensed
+    pending_visits = []
+    dispensed_visits = []
     total_units = 0
-    for p in prescriptions:
-        total_units += p.quantity_dispensed
-        if p.quantity_dispensed < p.quantity_prescribed:
-            pending.append(p)
+    
+    for visit in completed_visits:
+        prescriptions = visit.prescriptions.all()
+        has_pending = any(p.quantity_dispensed < p.quantity_prescribed for p in prescriptions)
+        for p in prescriptions:
+            total_units += p.quantity_dispensed
+        if has_pending:
+            pending_visits.append(visit)
         else:
-            fully.append(p)
-    # Sort fully dispensed by date descending
-    fully_sorted = sorted(fully, key=lambda x: x.dispensed_at or x.updated_at, reverse=True)
+            dispensed_visits.append(visit)
+    
+    dispensed_visits_sorted = sorted(dispensed_visits, key=lambda v: v.updated_at, reverse=True)
+    
     return {
-        'pending_count': len(pending),
-        'fully_dispensed_count': len(fully),
+        'pending_count': len(pending_visits),
+        'fully_dispensed_count': len(dispensed_visits),
         'total_units_dispensed': total_units,
-        'pending_prescriptions': pending,
-        'fully_dispensed_prescriptions': fully_sorted,
+        'pending_visits': pending_visits,
+        'dispensed_visits': dispensed_visits_sorted,
     }
 
 def get_admin_stats():
+    from .models import Visit, Medicine, Prescription
     cutoff = timezone.now().date() - timedelta(days=30)
     visits = Visit.objects.filter(created_at__date__gte=cutoff)
     medicines = Medicine.objects.all()
     prescriptions = Prescription.objects.filter(visit__in=visits)
     total_revenue = Visit.objects.filter(status='dispensed').aggregate(Sum('total_amount'))['total_amount__sum'] or 0
-    
-    # Get top 5 most prescribed medicines in last 30 days
     top_medicines = prescriptions.values('medicine__name').annotate(count=Sum('quantity_prescribed')).order_by('-count')[:5]
     top_medicines_list = [{'name': m['medicine__name'], 'count': m['count']} for m in top_medicines]
-    
     return {
         'patients_registered': visits.count(),
         'patients_treated': visits.filter(status='completed').count(),

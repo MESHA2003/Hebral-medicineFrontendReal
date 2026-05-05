@@ -1,13 +1,15 @@
 from datetime import timedelta
 from django.utils import timezone
+from django.http import HttpResponse
+import csv
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.db.models import Q
-from .models import Patient, Visit, Medicine, Prescription
-from .serializers import PatientSerializer, VisitSerializer, MedicineSerializer, PrescriptionSerializer
-from .stats_utils import get_pharmacy_stats  # import the function
+from .models import Patient, Visit, Medicine, Prescription, Receipt, ReceiptItem
+from .serializers import PatientSerializer, VisitSerializer, MedicineSerializer, PrescriptionSerializer, ReceiptSerializer, ReceiptItemSerializer
+from .stats_utils import get_pharmacy_stats, get_reception_stats, get_doctor_stats, get_admin_stats
 
 class IsPharmacyOrAdmin(IsAdminUser):
     def has_permission(self, request, view):
@@ -53,12 +55,26 @@ class VisitViewSet(viewsets.ModelViewSet):
             ).order_by('-created_at')
         return queryset.order_by('-created_at')
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['post'], url_path='complete')
     def complete_consultation(self, request, pk=None):
+        """
+        Complete consultation. Optionally send to pharmacy (default) or back to reception.
+        """
         visit = self.get_object()
-        visit.status = 'completed'
+        destination = request.data.get('destination', 'pharmacy')
+        if destination == 'reception':
+            visit.status = 'waiting'
+        else:
+            visit.status = 'completed'
         visit.save()
-        return Response({'status': 'completed'})
+        diagnosis = request.data.get('diagnosis')
+        notes = request.data.get('notes')
+        if diagnosis is not None:
+            visit.diagnosis = diagnosis
+        if notes is not None:
+            visit.notes = notes
+        visit.save()
+        return Response({'status': visit.status, 'destination': destination})
 
     @action(detail=False, methods=['get'], url_path='history')
     def history(self, request):
@@ -74,6 +90,65 @@ class VisitViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
         except Visit.DoesNotExist:
             return Response({'error': 'Ticket not found'}, status=404)
+
+    @action(detail=True, methods=['post'], url_path='dispense-all')
+    def dispense_all(self, request, pk=None):
+        """
+        Dispense ALL prescriptions for a visit at once, create ONE receipt with all items.
+        """
+        visit = self.get_object()
+        prescriptions = visit.prescriptions.all()
+        if not prescriptions.exists():
+            return Response({'error': 'No prescriptions found for this visit'}, status=400)
+
+        total_cost = 0
+        receipt_items_data = []
+
+        for pres in prescriptions:
+            remaining = pres.quantity_prescribed - pres.quantity_dispensed
+            if remaining <= 0:
+                continue
+
+            qty = remaining
+            cost = qty * pres.medicine.price_per_unit
+            total_cost += cost
+
+            # Dispense the prescription
+            pres.quantity_dispensed += qty
+            pres.dispensed_at = timezone.now()
+            pres.save()
+
+            # Reduce stock
+            med = pres.medicine
+            med.stock_quantity -= qty
+            med.save()
+
+            receipt_items_data.append({
+                'medicine_name': med.name,
+                'quantity': qty,
+                'unit_price': float(med.price_per_unit),
+                'total': float(cost),
+            })
+
+        # Update visit totals
+        visit.total_amount += total_cost
+        visit.status = 'dispensed'
+        visit.save()
+
+        # Create ONE receipt with all items
+        receipt = Receipt.objects.create(
+            visit=visit,
+            patient_name=visit.patient.name,
+            patient_id=visit.patient.patient_id,
+            ticket_number=visit.ticket_number,
+        )
+        for item_data in receipt_items_data:
+            ReceiptItem.objects.create(receipt=receipt, **item_data)
+
+        return Response({
+            'status': 'dispensed',
+            'receipt': ReceiptSerializer(receipt).data,
+        })
 
 class MedicineViewSet(viewsets.ModelViewSet):
     queryset = Medicine.objects.all()
@@ -97,29 +172,8 @@ class PrescriptionViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(visit_id=visit_id)
         return queryset
 
-    @action(detail=True, methods=['post'])
-    def dispense(self, request, pk=None):
-        prescription = self.get_object()
-        qty = int(request.data.get('quantity', 0))
-        if qty <= 0 or qty > (prescription.quantity_prescribed - prescription.quantity_dispensed):
-            return Response({'error': 'Invalid quantity'}, status=400)
-        prescription.quantity_dispensed += qty
-        if prescription.quantity_dispensed >= prescription.quantity_prescribed:
-            prescription.dispensed_at = timezone.now()
-        prescription.save()
-        medicine = prescription.medicine
-        medicine.stock_quantity -= qty
-        medicine.save()
-        visit = prescription.visit
-        if all(p.is_fully_dispensed for p in visit.prescriptions.all()):
-            visit.status = 'dispensed'
-            visit.save()
-        return Response({'status': 'dispensed', 'remaining': prescription.quantity_prescribed - prescription.quantity_dispensed})
-
 # -------------------- STATS VIEWSET --------------------
 from rest_framework.viewsets import ViewSet
-from rest_framework.response import Response
-from .stats_utils import get_pharmacy_stats, get_reception_stats, get_doctor_stats, get_admin_stats
 
 class StatsViewSet(ViewSet):
     permission_classes = [IsAuthenticated]
@@ -141,14 +195,14 @@ class StatsViewSet(ViewSet):
     @action(detail=False, methods=['get'], url_path='pharmacy')
     def pharmacy_stats(self, request):
         data = get_pharmacy_stats()
-        pending = data.pop('pending_prescriptions')
-        fully = data.pop('fully_dispensed_prescriptions')
+        pending_visits = data.pop('pending_visits', [])
+        dispensed_visits = data.pop('dispensed_visits', [])
         return Response({
             'pending_count': data['pending_count'],
             'fully_dispensed_count': data['fully_dispensed_count'],
             'total_units_dispensed': data['total_units_dispensed'],
-            'pending_prescriptions': PrescriptionSerializer(pending, many=True).data,
-            'fully_dispensed_prescriptions': PrescriptionSerializer(fully, many=True).data,
+            'pending_visits': VisitSerializer(pending_visits, many=True).data,
+            'dispensed_visits': VisitSerializer(dispensed_visits, many=True).data,
         })
 
     @action(detail=False, methods=['get'], url_path='admin')
@@ -157,9 +211,7 @@ class StatsViewSet(ViewSet):
         low_stock = data.pop('low_stock_medicines')
         top_medicines = data.get('top_medicines', [])
         data['low_stock_medicines'] = MedicineSerializer(low_stock, many=True).data
-        # top_medicines already has name and count from stats_utils, just pass it through
         data['top_medicines'] = top_medicines
-        # Generate weekly visits
         last7 = []
         for i in range(6, -1, -1):
             d = timezone.now().date() - timedelta(days=i)
@@ -167,3 +219,29 @@ class StatsViewSet(ViewSet):
             last7.append({'date': d.strftime('%m-%d'), 'count': count})
         data['weekly_visits'] = last7
         return Response(data)
+
+    @action(detail=False, methods=['get'], url_path='full-report')
+    def full_report(self, request):
+        patients = Patient.objects.all().values(
+            'patient_id', 'name', 'phone', 'age', 'gender', 'address', 'created_at'
+        )
+        visits = Visit.objects.all().values(
+            'ticket_number', 'patient__name', 'status', 'created_at', 'updated_at'
+        )
+        prescriptions = Prescription.objects.all().values(
+            'visit__ticket_number', 'medicine__name', 'quantity_prescribed', 'quantity_dispensed'
+        )
+        medicines = Medicine.objects.all().values(
+            'name', 'stock_quantity', 'price_per_unit', 'category', 'unit'
+        )
+        receipts = Receipt.objects.all().values(
+            'receipt_number', 'ticket_number', 'patient_name', 'created_at'
+        )
+        report = {
+            'patients': list(patients),
+            'visits': list(visits),
+            'prescriptions': list(prescriptions),
+            'medicines': list(medicines),
+            'receipts': list(receipts),
+        }
+        return Response(report)
