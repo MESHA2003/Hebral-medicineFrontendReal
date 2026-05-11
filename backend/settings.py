@@ -131,7 +131,7 @@ AUTH_USER_MODEL = 'accounts.User'
 # CORS CONFIGURATION – HARDCODED FOR PRODUCTION
 # ============================================================================
 CORS_ALLOWED_ORIGINS = [
-    "https://herbmedi-realy-back-qbad.vercel.app",   # your live frontend
+    "https://herbmedi-realy-back.vercel.app",        # live frontend
     "http://localhost:3000",                         # local development
 ]
 CORS_ALLOW_CREDENTIALS = True
