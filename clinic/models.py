@@ -80,18 +80,30 @@ class Medicine(models.Model):
     price_per_unit = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     source = models.CharField(max_length=100, blank=True, default='')
     stock_quantity = models.PositiveIntegerField(default=0)
-    total_capacity = models.PositiveIntegerField(default=0, help_text="Maximum stock capacity (100% level)")
+    total_capacity = models.PositiveIntegerField(default=0, help_text="Maximum stock capacity (100% level). Must be >= stock_quantity.")
     reorder_level = models.PositiveIntegerField(default=10)
     critical_level = models.PositiveIntegerField(default=5)
     expiry_date = models.DateField(null=True, blank=True)
     date_added = models.DateField(auto_now_add=True)
     description = models.TextField(blank=True, default='')
 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.total_capacity > 0 and self.stock_quantity > self.total_capacity:
+            raise ValidationError({
+                'stock_quantity': f'Stock quantity ({self.stock_quantity}) cannot exceed total capacity ({self.total_capacity}).'
+            })
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
     @property
     def stock_percentage(self):
         if self.total_capacity == 0:
             return 0
-        return round((self.stock_quantity / self.total_capacity) * 100, 1)
+        pct = round((self.stock_quantity / self.total_capacity) * 100, 1)
+        return min(pct, 100.0)
 
     @property
     def stock_status(self):
@@ -155,3 +167,45 @@ class ReceiptItem(models.Model):
 
     def __str__(self):
         return f"{self.medicine_name} ({self.quantity})"
+
+
+class FollowUp(models.Model):
+    """
+    Tracks follow-up visits for patients after their initial treatment.
+    Supports a complete workflow:
+      1. Receptionist searches patient, records condition, creates follow-up
+      2. Follow-up appears in reception's "pending reassignment" list
+      3. Receptionist reviews and reassigns to doctor
+      4. Doctor sees reassigned follow-ups, re-diagnoses, adds new prescriptions
+      5. Doctor completes and sends to pharmacy
+    """
+    FOLLOWUP_STATUS_CHOICES = (
+        ('pending_reassign', 'Pending Reassignment'),  # Just created, waiting for reception to reassign
+        ('reassigned', 'Reassigned to Doctor'),         # Reception has sent to doctor
+        ('in_progress', 'Doctor In Progress'),           # Doctor is working on it
+        ('completed', 'Completed'),                      # Doctor finished (sent to pharmacy)
+    )
+
+    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='follow_ups')
+    visit = models.ForeignKey(Visit, on_delete=models.SET_NULL, null=True, blank=True, related_name='follow_ups')
+    follow_up_date = models.DateField(default=timezone.now)
+    condition_after_treatment = models.TextField(blank=True, help_text="Patient's condition after treatment")
+    notes = models.TextField(blank=True)
+
+    # Workflow status
+    status = models.CharField(max_length=20, choices=FOLLOWUP_STATUS_CHOICES, default='pending_reassign')
+
+    # Reassignment tracking (receptionist)
+    reassigned_at = models.DateTimeField(null=True, blank=True)
+    reassigned_by = models.CharField(max_length=100, blank=True, help_text="Receptionist who reassigned")
+
+    # Doctor's follow-up assessment
+    re_diagnosis = models.TextField(blank=True, help_text="Doctor's re-diagnosis during follow-up")
+    doctor_notes = models.TextField(blank=True, help_text="Doctor's additional notes during follow-up")
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"FollowUp: {self.patient.patient_id} - {self.follow_up_date} ({self.get_status_display()})"

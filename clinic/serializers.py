@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Patient, Visit, Medicine, Prescription, Receipt, ReceiptItem
+from .models import Patient, Visit, Medicine, Prescription, Receipt, ReceiptItem, FollowUp
 
 class DateOnlyField(serializers.DateField):
     def to_internal_value(self, value):
@@ -41,6 +41,15 @@ class MedicineSerializer(serializers.ModelSerializer):
         model = Medicine
         fields = '__all__'
 
+    def validate(self, data):
+        stock_qty = data.get('stock_quantity', self.instance.stock_quantity if self.instance else 0)
+        total_cap = data.get('total_capacity', self.instance.total_capacity if self.instance else 0)
+        if total_cap > 0 and stock_qty > total_cap:
+            raise serializers.ValidationError({
+                'stock_quantity': f'Stock quantity ({stock_qty}) cannot exceed total capacity ({total_cap}).'
+            })
+        return data
+
 class PrescriptionSerializer(serializers.ModelSerializer):
     medicine_name = serializers.ReadOnlyField(source='medicine.name')
     medicine_price = serializers.ReadOnlyField(source='medicine.price_per_unit')
@@ -65,3 +74,25 @@ class ReceiptSerializer(serializers.ModelSerializer):
     class Meta:
         model = Receipt
         fields = '__all__'
+
+
+class FollowUpSerializer(serializers.ModelSerializer):
+    patient_name = serializers.ReadOnlyField(source='patient.name')
+    patient_phone = serializers.ReadOnlyField(source='patient.phone')
+    patient_id = serializers.ReadOnlyField(source='patient.patient_id')
+    patient_gender = serializers.ReadOnlyField(source='patient.gender')
+    patient_age = serializers.ReadOnlyField(source='patient.age')
+    patient_address = serializers.ReadOnlyField(source='patient.address')
+    patient_emergency_contact_name = serializers.ReadOnlyField(source='patient.emergency_contact_name')
+    patient_emergency_contact_phone = serializers.ReadOnlyField(source='patient.emergency_contact_phone')
+    visit_ticket = serializers.ReadOnlyField(source='visit.ticket_number')
+    follow_up_date = DateOnlyField()
+    reassigned_at = serializers.DateTimeField(read_only=True)
+    completed_at = serializers.DateTimeField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = FollowUp
+        fields = '__all__'
+        read_only_fields = ('created_at', 'updated_at', 'reassigned_at', 'completed_at')
