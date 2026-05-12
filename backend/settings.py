@@ -128,13 +128,24 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'accounts.User'
 
 # ============================================================================
-# CORS CONFIGURATION – HARDCODED FOR PRODUCTION
+# CORS CONFIGURATION
 # ============================================================================
-CORS_ALLOWED_ORIGINS = [
-    "https://herbmedi-realy-back.vercel.app",        # live frontend
-    "http://localhost:3000",                         # local development
-]
+# Read allowed origins from env or fall back to hardcoded list
+CORS_ALLOWED_ORIGINS_ENV = os.getenv('CORS_ALLOWED_ORIGINS', None)
+if CORS_ALLOWED_ORIGINS_ENV:
+    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_ENV.split(',')
+else:
+    CORS_ALLOWED_ORIGINS = [
+        "https://shekilindi-herbal.vercel.app",      # live frontend
+        "https://herbmedi-realy-back.vercel.app",    # old frontend (keep for backwards compat)
+        "http://localhost:3000",                      # local development
+        "http://localhost:5173",                      # vite dev server
+    ]
 CORS_ALLOW_CREDENTIALS = True
+
+# Allow all origins in DEBUG mode for easier development
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
 
 # ============================================================================
 # REST FRAMEWORK
